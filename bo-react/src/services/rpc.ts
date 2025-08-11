@@ -3,7 +3,7 @@ export type JsonRpcResponse = { data: any }
 const DEFAULT_SERVICE_URL = (typeof window === 'undefined' ? process.env.SERVICE_URL : '/rpc') || '/rpc'
 
 async function rpcCall<T = JsonRpcResponse>(method: string, ...params: any[]): Promise<T> {
-  const res = await fetch(DEFAULT_SERVICE_URL, {
+  const res = await fetch(DEFAULT_SERVICE_URL, { credentials: 'same-origin',
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: 0, method, params })

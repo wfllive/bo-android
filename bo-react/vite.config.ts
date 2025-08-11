@@ -6,5 +6,11 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
+    proxy: {
+      '/rpc': {
+        target: 'http://localhost:7070',
+        changeOrigin: true,
+      },
+    },
   },
 })

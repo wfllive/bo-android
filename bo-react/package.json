@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "proxy": "node server.js"
+    "proxy": "node server.js",
+    "serv": "node server.js"
   },
   "keywords": [],
   "author": "",

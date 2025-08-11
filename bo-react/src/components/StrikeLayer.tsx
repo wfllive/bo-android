@@ -24,7 +24,9 @@ export function StrikeLayer() {
       try {
         const res = await getStrikes({ intervalDuration: 60, intervalOffset: -1, nextId: nextIdRef.current })
         const data = (res as any).data
-        const ref = Date.parse(data.t.replace("'", '')) || Date.now()
+        // t format example: 20250101'T'12:34:56
+        const t: string = data.t
+        const ref = (t && t.includes("T")) ? Date.parse(t.replace("'", 'Z')) : Date.now()
         setReferenceTime(ref)
         const s = (data.s as any[]).map((arr: any[]) => ({
           timestamp: ref - 1000 * arr[0],
@@ -37,7 +39,7 @@ export function StrikeLayer() {
         setStrikes(prev => (nextIdRef.current === 0 ? s : [...prev, ...s]).slice(-5000))
         if (typeof data.next === 'number') nextIdRef.current = data.next
       } catch (e) {
-        // ignore
+        console.error('get_strikes failed', e)
       }
       if (!cancelled) setTimeout(tick, 2000)
     }
