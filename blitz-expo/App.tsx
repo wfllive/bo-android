@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { View, StyleSheet, Text } from 'react-native'
 import { OSMView, type OSMViewRef, type MarkerConfig, type CircleConfig } from 'expo-osm-sdk'
-import * as Location from 'expo-location'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
@@ -28,19 +27,19 @@ type GridParams = {
   yc: number
 }
 
-// Center view on the world
 const DEFAULT_COORD = { lat: 20.0, lon: 0.0 }
 
 const RAW_SERVICE_URL = (Constants.expoConfig?.extra as any)?.blitz?.serviceUrl || 'http://bo-service.tryb.de/'
-const SERVICE_URL = RAW_SERVICE_URL.endsWith('/') ? RAW_SERVICE_URL : RAW_SERVICE_URL + '/'
+const BASE_HTTP = RAW_SERVICE_URL.endsWith('/') ? RAW_SERVICE_URL : RAW_SERVICE_URL + '/'
+const BASE_HTTPS = BASE_HTTP.replace('http://', 'https://')
 
 function buildJsonRpcRequest(method: string, params: any[]): string {
   return JSON.stringify({ id: 0, method, params })
 }
 
-async function callJsonRpc<T = any>(url: string, method: string, params: any[] = []): Promise<T> {
+async function callJsonRpc<T = any>(baseUrl: string, method: string, params: any[] = []): Promise<T> {
   const body = buildJsonRpcRequest(method, params)
-  const response = await fetch(url, {
+  const response = await fetch(baseUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'text/json',
@@ -54,14 +53,8 @@ async function callJsonRpc<T = any>(url: string, method: string, params: any[] =
   const rawText = await response.text()
   const text = (rawText || '').trim()
   if (!text) throw new Error('Empty JSON-RPC response')
-  try {
-    const parsed = JSON.parse(text)
-    const json = Array.isArray(parsed) ? parsed[0] : parsed
-    if (!json || typeof json !== 'object') throw new Error('Invalid JSON-RPC payload')
-    return json as T
-  } catch (e: any) {
-    throw new Error(`JSON parse failed: ${e?.message || e}`)
-  }
+  const parsed = JSON.parse(text)
+  return (Array.isArray(parsed) ? parsed[0] : parsed) as T
 }
 
 function parseGridToStrikes(referenceTimeIso: string, gridParams: GridParams, r: any[]): Strike[] {
@@ -93,19 +86,33 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [strikes, setStrikes] = useState<Strike[]>([])
   const [lastUpdate, setLastUpdate] = useState<string>('—')
+  const [debugInfo, setDebugInfo] = useState<string>('')
   const mapRef = useRef<OSMViewRef>(null)
 
-  const fetchGlobalGrid = useCallback(async (intervalMinutes: number, gridSize: number) => {
-    const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_global_strikes_grid', [intervalMinutes, gridSize, 0, 0])
+  const fetchGlobalGridBase = useCallback(async (baseUrl: string, intervalMinutes: number, gridSize: number) => {
+    const payload: any = await callJsonRpc<any>(baseUrl, 'get_global_strikes_grid', [intervalMinutes, gridSize, 0, 0])
     const t = payload?.t as string
     const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
     const r = payload?.r as any[]
-    return parseGridToStrikes(t, gridParams, r)
+    const parsed = parseGridToStrikes(t, gridParams, r)
+    setDebugInfo(`t=${t || 'n/a'} r.len=${Array.isArray(r) ? r.length : 'n/a'} x0=${gridParams.x0?.toFixed?.(2) ?? 'n/a'} xd=${gridParams.xd?.toFixed?.(2) ?? 'n/a'}`)
+    return parsed
   }, [])
+
+  const fetchGlobalGrid = useCallback(async (intervalMinutes: number, gridSize: number) => {
+    const parsedHttp = await fetchGlobalGridBase(BASE_HTTP, intervalMinutes, gridSize)
+    if (parsedHttp.length > 0) return parsedHttp
+    // Try HTTPS fallback if HTTP returns empty
+    try {
+      const parsedHttps = await fetchGlobalGridBase(BASE_HTTPS, intervalMinutes, gridSize)
+      return parsedHttps
+    } catch {
+      return parsedHttp
+    }
+  }, [fetchGlobalGridBase])
 
   const fetchInitial = useCallback(async () => {
     try {
-      // 240 minutes to ensure historical coverage worldwide
       const parsed = await fetchGlobalGrid(240, 4)
       setStrikes(parsed)
       setLastUpdate(new Date().toLocaleTimeString())
@@ -142,7 +149,6 @@ export default function App() {
     zIndex: 1,
   }))
 
-  // Optional: small circles scaled by multiplicity
   const circles: CircleConfig[] = strikes.map((s, idx) => ({
     id: `c-${s.id}`,
     center: { latitude: s.latitude, longitude: s.longitude },
@@ -167,6 +173,7 @@ export default function App() {
       />
       <View style={styles.hud}>
         <Text style={styles.hudText}>strikes: {strikes.length} • updated: {lastUpdate} (global)</Text>
+        {debugInfo ? <Text style={styles.hudTextSmall}>{debugInfo}</Text> : null}
       </View>
       {error ? (<View style={styles.errorBanner}><Text style={styles.errorText}>{error}</Text></View>) : null}
     </View>
@@ -181,6 +188,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
   },
   hudText: { color: '#fff', fontSize: 12, textAlign: 'center' },
+  hudTextSmall: { color: '#ddd', fontSize: 10, textAlign: 'center', marginTop: 2 },
   errorBanner: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     backgroundColor: 'rgba(0,0,0,0.7)', padding: 8,
