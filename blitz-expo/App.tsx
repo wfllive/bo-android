@@ -179,7 +179,38 @@ export default function App() {
     } catch (e: any) {
       setError(String(e?.message || e))
     }
-    // Fallback 2: Global grid snapshot
+    // Fallback 2: Local grid around current center
+    try {
+      const gridSize = 5000
+      const intervalOffset = 0
+      const countThreshold = 0
+      // Calculate localReference bucketing like Android
+      const calculateLocalCoordinate = (value: number, dataArea: number) => {
+        return Math.trunc(value / dataArea) - (value < 0 ? 1 : 0)
+      }
+      const dataArea = 5
+      const x = calculateLocalCoordinate(center.lon, dataArea)
+      const y = calculateLocalCoordinate(center.lat, dataArea)
+      const payload: any = await callJsonRpc<any>(
+        SERVICE_URL,
+        'get_local_strikes_grid',
+        [x, y, gridSize, intervalMinutes, intervalOffset, countThreshold, dataArea]
+      )
+      const t = payload?.t as string
+      const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
+      const r = payload?.r as any[]
+      const parsed = parseGridToStrikes(t, gridParams, r)
+      if (parsed.length > 0) {
+        setUsedGrid('local')
+        setStrikes(parsed)
+        setLastUpdate(new Date().toLocaleTimeString())
+        nextIdRef.current = 0
+        return
+      }
+    } catch (e: any) {
+      setError(String(e?.message || e))
+    }
+    // Fallback 3: Global grid snapshot
     try {
       const gridSize = 4
       const intervalOffset = 0
@@ -207,6 +238,32 @@ export default function App() {
           SERVICE_URL,
           'get_strikes_grid',
           [intervalMinutes, gridSize, 0, REGION_NORTH_AMERICA, 0]
+        )
+        const t = payload?.t as string
+        const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
+        const r = payload?.r as any[]
+        const parsed = parseGridToStrikes(t, gridParams, r)
+        setStrikes(parsed)
+        setLastUpdate(new Date().toLocaleTimeString())
+      } catch (e: any) {
+        setError(String(e?.message || e))
+      }
+      return
+    }
+    if (usedGrid === 'local') {
+      try {
+        const intervalMinutes = 10
+        const gridSize = 5000
+        const dataArea = 5
+        const calculateLocalCoordinate = (value: number, dataArea: number) => {
+          return Math.trunc(value / dataArea) - (value < 0 ? 1 : 0)
+        }
+        const x = calculateLocalCoordinate(center.lon, dataArea)
+        const y = calculateLocalCoordinate(center.lat, dataArea)
+        const payload: any = await callJsonRpc<any>(
+          SERVICE_URL,
+          'get_local_strikes_grid',
+          [x, y, gridSize, intervalMinutes, 0, 0, dataArea]
         )
         const t = payload?.t as string
         const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
@@ -253,7 +310,7 @@ export default function App() {
     } catch (e: any) {
       setError(String(e?.message || e))
     }
-  }, [usedGrid])
+  }, [usedGrid, center])
 
   useEffect(() => {
     let mounted = true
