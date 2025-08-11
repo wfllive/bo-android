@@ -44,6 +44,14 @@
             "usesCleartextTraffic": true
           }
         }
+      ],
+      [
+        "@rnmapbox/maps",
+        {
+          "android": {
+            "accessToken": ""
+          }
+        }
       ]
     ],
     "web": {

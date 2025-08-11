@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { View, StyleSheet, Text } from 'react-native'
-import { WebView } from 'react-native-webview'
+import MapboxGL from '@rnmapbox/maps'
 import * as Location from 'expo-location'
 import dayjs from 'dayjs'
 import Constants from 'expo-constants'
@@ -16,6 +16,8 @@ type Strike = {
 
 const DEFAULT_COORD = { lat: 51.0, lon: 10.0 }
 const SERVICE_URL = (Constants.expoConfig?.extra as any)?.blitz?.serviceUrl || 'http://bo-service.tryb.de/'
+
+MapboxGL.setAccessToken('')
 
 function buildJsonRpcRequest(method: string, params: any[]): string {
   return JSON.stringify({ id: 0, method, params })
@@ -64,65 +66,10 @@ function parseStrikes(referenceTimeIso: string, strikesArray: any[]): Strike[] {
   })
 }
 
-const HTML = (centerLat: number, centerLon: number) => `<!doctype html>
-<html>
-<head>
-<meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
-<style>
-  html, body, #map { height: 100%; margin: 0; padding: 0; }
-  .marker { width: 10px; height: 10px; background: rgba(255,0,0,0.9); border-radius: 5px; border: 2px solid #fff; box-shadow: 0 0 6px rgba(0,0,0,0.3) }
-</style>
-<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
-</head>
-<body>
-<div id="map"></div>
-<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
-<script>
-  const map = new maplibregl.Map({
-    container: 'map',
-    style: 'https://demotiles.maplibre.org/style.json',
-    center: [${centerLon}, ${centerLat}],
-    zoom: 4
-  });
-  const strikes = new Map();
-  function updateStrikes(items) {
-    if (!Array.isArray(items)) return;
-    const cutoff = Date.now() - 60 * 60 * 1000;
-    // Remove old
-    for (const [id, m] of strikes) {
-      if (m.timestamp < cutoff) {
-        try { m.marker.remove(); } catch (e) {}
-        strikes.delete(id);
-      }
-    }
-    // Add new
-    items.forEach(s => {
-      if (!s || !('id' in s) || strikes.has(s.id)) return;
-      const el = document.createElement('div');
-      el.className = 'marker';
-      const marker = new maplibregl.Marker({ element: el }).setLngLat([s.longitude, s.latitude]).addTo(map);
-      strikes.set(s.id, { el, marker, timestamp: s.timestamp });
-    });
-  }
-  function onMessage(evt) {
-    try {
-      const dataRaw = (evt && evt.data) ? evt.data : null;
-      if (!dataRaw || typeof dataRaw !== 'string') return;
-      const data = JSON.parse(dataRaw);
-      if (data && data.type === 'strikes') updateStrikes(data.payload || []);
-    } catch (e) {
-      // ignore parse errors silently
-    }
-  }
-  window.addEventListener('message', onMessage);
-</script>
-</body>
-</html>`
-
 export default function App() {
   const [center, setCenter] = useState(DEFAULT_COORD)
   const [error, setError] = useState<string | null>(null)
-  const webRef = useRef<WebView>(null)
+  const [strikes, setStrikes] = useState<Strike[]>([])
   const nextIdRef = useRef<number>(0)
 
   useEffect(() => {
@@ -140,22 +87,15 @@ export default function App() {
     return () => { mounted = false }
   }, [])
 
-  const postStrikes = useCallback((strikes: Strike[]) => {
-    try {
-      const payload = JSON.stringify({ type: 'strikes', payload: strikes })
-      webRef.current?.postMessage(payload)
-    } catch {}
-  }, [])
-
   const fetchInitial = useCallback(async () => {
     const intervalMinutes = 15
     const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_strikes', [intervalMinutes, 0])
     const t = payload?.t as string
     const s = payload?.s as any[]
     const parsed = parseStrikes(t, s)
-    postStrikes(parsed)
+    setStrikes(parsed)
     if (typeof payload?.next === 'number') nextIdRef.current = payload.next
-  }, [postStrikes])
+  }, [])
 
   const fetchIncremental = useCallback(async () => {
     if (!nextIdRef.current) return
@@ -164,9 +104,14 @@ export default function App() {
     const t = payload?.t as string
     const s = payload?.s as any[]
     const parsed = parseStrikes(t, s)
-    if (parsed.length) postStrikes(parsed)
+    if (parsed.length) {
+      setStrikes((prev) => {
+        const oneHourAgo = Date.now() - 60 * 60 * 1000
+        return [...prev.filter(p => p.timestamp >= oneHourAgo), ...parsed]
+      })
+    }
     if (typeof payload?.next === 'number') nextIdRef.current = payload.next
-  }, [postStrikes])
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -179,7 +124,15 @@ export default function App() {
 
   return (
     <View style={styles.container}>
-      <WebView ref={webRef} style={styles.web} originWhitelist={["*"]} source={{ html: HTML(center.lat, center.lon) }} />
+      <MapboxGL.MapView style={styles.map} styleURL="https://demotiles.maplibre.org/style.json">
+        <MapboxGL.Camera
+          zoomLevel={4}
+          centerCoordinate={[center.lon, center.lat]}
+        />
+        {strikes.map((s) => (
+          <MapboxGL.PointAnnotation key={s.id} id={s.id} coordinate={[s.longitude, s.latitude]} />
+        ))}
+      </MapboxGL.MapView>
       {error ? (<View style={styles.errorBanner}><Text style={styles.errorText}>{error}</Text></View>) : null}
     </View>
   )
@@ -187,7 +140,7 @@ export default function App() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  web: { flex: 1 },
+  map: { flex: 1 },
   errorBanner: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     backgroundColor: 'rgba(0,0,0,0.7)', padding: 8,

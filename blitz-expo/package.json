@@ -9,6 +9,7 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@rnmapbox/maps": "^10.1.40",
     "dayjs": "^1.11.13",
     "expo": "~53.0.20",
     "expo-build-properties": "^0.14.8",
