@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { View, StyleSheet, Text } from 'react-native'
-import { OSMView, type OSMViewRef, Marker as OSMMarker } from 'expo-osm-sdk'
+import { OSMView, type OSMViewRef, type MarkerConfig, type CircleConfig } from 'expo-osm-sdk'
 import * as Location from 'expo-location'
 import dayjs from 'dayjs'
 import Constants from 'expo-constants'
@@ -25,7 +25,11 @@ async function callJsonRpc<T = any>(url: string, method: string, params: any[] =
   const body = buildJsonRpcRequest(method, params)
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'text/json',
+      'Accept': '*/*',
+      'User-Agent': 'bo-android-expo'
+    },
     body,
   })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -121,6 +125,23 @@ export default function App() {
     return () => { mounted = false; clearInterval(id) }
   }, [fetchInitial, fetchIncremental])
 
+  const markers: MarkerConfig[] = strikes.map((s) => ({
+    id: s.id,
+    coordinate: { latitude: s.latitude, longitude: s.longitude },
+    icon: { color: '#ff0000', size: 12 },
+    title: `Amp ${s.amplitude.toFixed(1)} kA`,
+    description: new Date(s.timestamp).toLocaleTimeString(),
+  }))
+
+  const circles: CircleConfig[] = strikes.slice(-200).map((s, idx) => ({
+    id: `c-${s.id}-${idx}`,
+    center: { latitude: s.latitude, longitude: s.longitude },
+    radius: Math.max(1000, s.lateralError * 1000),
+    fillColor: 'rgba(255,0,0,0.15)',
+    strokeColor: 'rgba(255,0,0,0.6)',
+    strokeWidth: 1,
+  }))
+
   return (
     <View style={styles.container}>
       <OSMView
@@ -128,17 +149,11 @@ export default function App() {
         style={styles.map}
         initialCenter={{ latitude: center.lat, longitude: center.lon }}
         initialZoom={4}
+        markers={markers}
+        circles={circles}
+        clustering={{ enabled: true }}
         onMapReady={() => {}}
-      >
-        {strikes.map((s) => (
-          <OSMMarker
-            key={s.id}
-            id={s.id}
-            coordinate={{ latitude: s.latitude, longitude: s.longitude }}
-            color="#ff0000"
-          />
-        ))}
-      </OSMView>
+      />
       {error ? (<View style={styles.errorBanner}><Text style={styles.errorText}>{error}</Text></View>) : null}
     </View>
   )
