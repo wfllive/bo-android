@@ -1,11 +1,14 @@
-# React + Webpack (без Vite)
+# Lightning Monitor (React + Webpack)
 
-Запуск и разработка:
+Мониторинг молний в стиле Blitzortung: карта Leaflet, поток через WebSocket или демо-генератор.
+
+Запуск:
 
 ```bash
 npm install
 npm run dev
 ```
+Откройте `http://localhost:5173`.
 
 Сборка продакшн:
 
@@ -13,8 +16,11 @@ npm run dev
 npm run build
 ```
 
+Конфиг:
+- Рантайм-файл `public/config.js`. Установите `window.APP_CONFIG.lightningWsUrl = 'wss://...'` для реального потока.
+- По умолчанию включён демо-режим (случайные молнии).
+
 Структура:
-- `src/` — исходники React
-- `public/` — HTML-шаблон
-- `webpack.config.js` — конфигурация сборщика
-- `.babelrc` — настройки Babel
+- `src/components/MapView.jsx` — карта Leaflet
+- `src/hooks/useLightningStream.js` — поток молний
+- `src/components/Controls.jsx` — панель управления
