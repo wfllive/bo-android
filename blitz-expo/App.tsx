@@ -14,6 +14,15 @@ type Strike = {
   amplitude: number
 }
 
+type GridParams = {
+  x0: number
+  y1: number
+  xd: number
+  yd: number
+  xc: number
+  yc: number
+}
+
 const DEFAULT_COORD = { lat: 51.0, lon: 10.0 }
 const RAW_SERVICE_URL = (Constants.expoConfig?.extra as any)?.blitz?.serviceUrl || 'http://bo-service.tryb.de/'
 const SERVICE_URL = RAW_SERVICE_URL.endsWith('/') ? RAW_SERVICE_URL : RAW_SERVICE_URL + '/'
@@ -70,11 +79,36 @@ function parseStrikes(referenceTimeIso: string, strikesArray: any[]): Strike[] {
   })
 }
 
+function parseGridToStrikes(referenceTimeIso: string, gridParams: GridParams, r: any[]): Strike[] {
+  const referenceMs = dayjs(referenceTimeIso, "YYYYMMDD'T'HH:mm:ss").valueOf()
+  if (!Number.isFinite(referenceMs)) return []
+  if (!Array.isArray(r)) return []
+  const { x0, y1, xd, yd } = gridParams
+  return r.map((row, idx) => {
+    const xi = row?.[0] as number
+    const yi = row?.[1] as number
+    const multiplicity = row?.[2] as number
+    const dt = row?.[3] as number
+    const longitude = x0 + (xi + 0.5) * xd
+    const latitude = y1 + (yi + 0.5) * yd
+    const timestamp = referenceMs + (Number.isFinite(dt) ? dt : 0) * 1000
+    return {
+      id: `g-${timestamp}-${longitude}-${latitude}-${idx}`,
+      timestamp,
+      longitude,
+      latitude,
+      lateralError: 10, // approximate
+      amplitude: multiplicity || 1,
+    }
+  })
+}
+
 export default function App() {
   const [center, setCenter] = useState(DEFAULT_COORD)
   const [error, setError] = useState<string | null>(null)
   const [strikes, setStrikes] = useState<Strike[]>([])
   const [lastUpdate, setLastUpdate] = useState<string>('—')
+  const [usedGrid, setUsedGrid] = useState<boolean>(false)
   const nextIdRef = useRef<number>(0)
   const mapRef = useRef<OSMViewRef>(null)
 
@@ -94,33 +128,79 @@ export default function App() {
   }, [])
 
   const fetchInitial = useCallback(async () => {
-    const intervalMinutes = 5
-    // Android client uses negative intervalOffset for initial backlog
-    const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_strikes', [intervalMinutes, -intervalMinutes])
-    const t = payload?.t as string
-    const s = payload?.s as any[]
-    const parsed = parseStrikes(t, s)
-    setStrikes(parsed)
-    setLastUpdate(new Date().toLocaleTimeString())
-    if (typeof payload?.next === 'number') nextIdRef.current = payload.next
+    // Try detailed strikes first (60-minute backlog)
+    const intervalMinutes = 60
+    try {
+      const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_strikes', [intervalMinutes, -intervalMinutes])
+      const t = payload?.t as string
+      const s = payload?.s as any[]
+      const parsed = parseStrikes(t, s)
+      if (parsed.length > 0) {
+        setUsedGrid(false)
+        setStrikes(parsed)
+        setLastUpdate(new Date().toLocaleTimeString())
+        if (typeof payload?.next === 'number') nextIdRef.current = payload.next
+        return
+      }
+    } catch (e: any) {
+      setError(String(e?.message || e))
+    }
+    // Fallback: global grid snapshot
+    try {
+      const gridSize = 4
+      const intervalOffset = 0
+      const countThreshold = 0
+      const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_global_strikes_grid', [intervalMinutes, gridSize, intervalOffset, countThreshold])
+      const t = payload?.t as string
+      const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
+      const r = payload?.r as any[]
+      const parsed = parseGridToStrikes(t, gridParams, r)
+      setUsedGrid(true)
+      setStrikes(parsed)
+      setLastUpdate(new Date().toLocaleTimeString())
+      nextIdRef.current = 0
+    } catch (e: any) {
+      setError(String(e?.message || e))
+    }
   }, [])
 
   const fetchIncremental = useCallback(async () => {
-    if (!nextIdRef.current) return
-    const intervalMinutes = 5
-    const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_strikes', [intervalMinutes, nextIdRef.current])
-    const t = payload?.t as string
-    const s = payload?.s as any[]
-    const parsed = parseStrikes(t, s)
-    if (parsed.length) {
-      setStrikes((prev) => {
-        const oneHourAgo = Date.now() - 60 * 60 * 1000
-        return [...prev.filter(p => p.timestamp >= oneHourAgo), ...parsed]
-      })
-      setLastUpdate(new Date().toLocaleTimeString())
+    if (usedGrid) {
+      // For grid fallback, just refresh snapshot periodically
+      try {
+        const intervalMinutes = 10
+        const gridSize = 4
+        const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_global_strikes_grid', [intervalMinutes, gridSize, 0, 0])
+        const t = payload?.t as string
+        const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
+        const r = payload?.r as any[]
+        const parsed = parseGridToStrikes(t, gridParams, r)
+        setStrikes(parsed)
+        setLastUpdate(new Date().toLocaleTimeString())
+      } catch (e: any) {
+        setError(String(e?.message || e))
+      }
+      return
     }
-    if (typeof payload?.next === 'number') nextIdRef.current = payload.next
-  }, [])
+    if (!nextIdRef.current) return
+    const intervalMinutes = 10
+    try {
+      const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_strikes', [intervalMinutes, nextIdRef.current])
+      const t = payload?.t as string
+      const s = payload?.s as any[]
+      const parsed = parseStrikes(t, s)
+      if (parsed.length) {
+        setStrikes((prev) => {
+          const oneHourAgo = Date.now() - 60 * 60 * 1000
+          return [...prev.filter(p => p.timestamp >= oneHourAgo), ...parsed]
+        })
+        setLastUpdate(new Date().toLocaleTimeString())
+      }
+      if (typeof payload?.next === 'number') nextIdRef.current = payload.next
+    } catch (e: any) {
+      setError(String(e?.message || e))
+    }
+  }, [usedGrid])
 
   useEffect(() => {
     let mounted = true
@@ -161,7 +241,7 @@ export default function App() {
         onMapReady={() => {}}
       />
       <View style={styles.hud}>
-        <Text style={styles.hudText}>strikes: {strikes.length} • updated: {lastUpdate}</Text>
+        <Text style={styles.hudText}>strikes: {strikes.length} • updated: {lastUpdate} {usedGrid ? '(grid)' : ''}</Text>
       </View>
       {error ? (<View style={styles.errorBanner}><Text style={styles.errorText}>{error}</Text></View>) : null}
     </View>
