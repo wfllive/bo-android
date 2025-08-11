@@ -7,7 +7,6 @@ import utc from 'dayjs/plugin/utc'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
 import Constants from 'expo-constants'
 
-// Enable UTC and custom parse formats for dayjs
 dayjs.extend(utc)
 dayjs.extend(customParseFormat)
 
@@ -29,9 +28,8 @@ type GridParams = {
   yc: number
 }
 
-// Center over continental USA by default
-const DEFAULT_COORD = { lat: 39.0, lon: -98.0 }
-const REGION_NORTH_AMERICA = 3
+// Center view on the world
+const DEFAULT_COORD = { lat: 20.0, lon: 0.0 }
 
 const RAW_SERVICE_URL = (Constants.expoConfig?.extra as any)?.blitz?.serviceUrl || 'http://bo-service.tryb.de/'
 const SERVICE_URL = RAW_SERVICE_URL.endsWith('/') ? RAW_SERVICE_URL : RAW_SERVICE_URL + '/'
@@ -66,28 +64,6 @@ async function callJsonRpc<T = any>(url: string, method: string, params: any[] =
   }
 }
 
-function parseStrikes(referenceTimeIso: string, strikesArray: any[]): Strike[] {
-  const referenceMs = dayjs.utc(referenceTimeIso, "YYYYMMDD'T'HH:mm:ss", true).valueOf()
-  if (!Number.isFinite(referenceMs)) return []
-  if (!Array.isArray(strikesArray)) return []
-  return strikesArray.map((arr, idx) => {
-    const secondsAgo = arr?.[0] as number
-    const longitude = arr?.[1] as number
-    const latitude = arr?.[2] as number
-    const lateralError = arr?.[3] as number
-    const amplitude = arr?.[4] as number
-    const timestamp = referenceMs - (Number.isFinite(secondsAgo) ? secondsAgo : 0) * 1000
-    return {
-      id: `${timestamp}-${longitude}-${latitude}-${idx}`,
-      timestamp,
-      longitude,
-      latitude,
-      lateralError,
-      amplitude,
-    }
-  })
-}
-
 function parseGridToStrikes(referenceTimeIso: string, gridParams: GridParams, r: any[]): Strike[] {
   const referenceMs = dayjs.utc(referenceTimeIso, "YYYYMMDD'T'HH:mm:ss", true).valueOf()
   if (!Number.isFinite(referenceMs)) return []
@@ -106,236 +82,75 @@ function parseGridToStrikes(referenceTimeIso: string, gridParams: GridParams, r:
       timestamp,
       longitude,
       latitude,
-      lateralError: 10, // approximate
+      lateralError: 0,
       amplitude: multiplicity || 1,
     }
   })
 }
 
 export default function App() {
-  const [center, setCenter] = useState(DEFAULT_COORD)
+  const [center] = useState(DEFAULT_COORD)
   const [error, setError] = useState<string | null>(null)
   const [strikes, setStrikes] = useState<Strike[]>([])
   const [lastUpdate, setLastUpdate] = useState<string>('—')
-  const [usedGrid, setUsedGrid] = useState<string>('') // '', 'global', 'na'
-  const nextIdRef = useRef<number>(0)
   const mapRef = useRef<OSMViewRef>(null)
 
-  useEffect(() => {
-    let mounted = true
-    ;(async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync()
-        if (status === 'granted') {
-          const pos = await Location.getCurrentPositionAsync({})
-          if (!mounted) return
-          // Keep USA centered per request; comment next line to auto-center on user
-          // setCenter({ lat: pos.coords.latitude, lon: pos.coords.longitude })
-        }
-      } catch (e: any) { setError(String(e?.message || e)) }
-    })()
-    return () => { mounted = false }
+  const fetchGlobalGrid = useCallback(async (intervalMinutes: number, gridSize: number) => {
+    const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_global_strikes_grid', [intervalMinutes, gridSize, 0, 0])
+    const t = payload?.t as string
+    const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
+    const r = payload?.r as any[]
+    return parseGridToStrikes(t, gridParams, r)
   }, [])
 
   const fetchInitial = useCallback(async () => {
-    // Try detailed strikes first (60-minute backlog)
-    const intervalMinutes = 60
     try {
-      const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_strikes', [intervalMinutes, -intervalMinutes])
-      const t = payload?.t as string
-      const s = payload?.s as any[]
-      const parsed = parseStrikes(t, s)
-      if (parsed.length > 0) {
-        setUsedGrid('')
-        setStrikes(parsed)
-        setLastUpdate(new Date().toLocaleTimeString())
-        if (typeof payload?.next === 'number') nextIdRef.current = payload.next
-        return
-      }
-    } catch (e: any) {
-      setError(String(e?.message || e))
-    }
-    // Fallback 1: North America regional grid snapshot
-    try {
-      const gridSize = 5000
-      const intervalOffset = 0
-      const countThreshold = 0
-      const payload: any = await callJsonRpc<any>(
-        SERVICE_URL,
-        'get_strikes_grid',
-        [intervalMinutes, gridSize, intervalOffset, REGION_NORTH_AMERICA, countThreshold]
-      )
-      const t = payload?.t as string
-      const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
-      const r = payload?.r as any[]
-      const parsed = parseGridToStrikes(t, gridParams, r)
-      if (parsed.length > 0) {
-        setUsedGrid('na')
-        setStrikes(parsed)
-        setLastUpdate(new Date().toLocaleTimeString())
-        nextIdRef.current = 0
-        return
-      }
-    } catch (e: any) {
-      setError(String(e?.message || e))
-    }
-    // Fallback 2: Local grid around current center
-    try {
-      const gridSize = 5000
-      const intervalOffset = 0
-      const countThreshold = 0
-      // Calculate localReference bucketing like Android
-      const calculateLocalCoordinate = (value: number, dataArea: number) => {
-        return Math.trunc(value / dataArea) - (value < 0 ? 1 : 0)
-      }
-      const dataArea = 5
-      const x = calculateLocalCoordinate(center.lon, dataArea)
-      const y = calculateLocalCoordinate(center.lat, dataArea)
-      const payload: any = await callJsonRpc<any>(
-        SERVICE_URL,
-        'get_local_strikes_grid',
-        [x, y, gridSize, intervalMinutes, intervalOffset, countThreshold, dataArea]
-      )
-      const t = payload?.t as string
-      const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
-      const r = payload?.r as any[]
-      const parsed = parseGridToStrikes(t, gridParams, r)
-      if (parsed.length > 0) {
-        setUsedGrid('local')
-        setStrikes(parsed)
-        setLastUpdate(new Date().toLocaleTimeString())
-        nextIdRef.current = 0
-        return
-      }
-    } catch (e: any) {
-      setError(String(e?.message || e))
-    }
-    // Fallback 3: Global grid snapshot
-    try {
-      const gridSize = 4
-      const intervalOffset = 0
-      const countThreshold = 0
-      const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_global_strikes_grid', [intervalMinutes, gridSize, intervalOffset, countThreshold])
-      const t = payload?.t as string
-      const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
-      const r = payload?.r as any[]
-      const parsed = parseGridToStrikes(t, gridParams, r)
-      setUsedGrid('global')
+      // 240 minutes to ensure historical coverage worldwide
+      const parsed = await fetchGlobalGrid(240, 4)
       setStrikes(parsed)
       setLastUpdate(new Date().toLocaleTimeString())
-      nextIdRef.current = 0
     } catch (e: any) {
       setError(String(e?.message || e))
     }
-  }, [])
+  }, [fetchGlobalGrid])
 
-  const fetchIncremental = useCallback(async () => {
-    if (usedGrid === 'na') {
-      try {
-        const intervalMinutes = 10
-        const gridSize = 5000
-        const payload: any = await callJsonRpc<any>(
-          SERVICE_URL,
-          'get_strikes_grid',
-          [intervalMinutes, gridSize, 0, REGION_NORTH_AMERICA, 0]
-        )
-        const t = payload?.t as string
-        const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
-        const r = payload?.r as any[]
-        const parsed = parseGridToStrikes(t, gridParams, r)
-        setStrikes(parsed)
-        setLastUpdate(new Date().toLocaleTimeString())
-      } catch (e: any) {
-        setError(String(e?.message || e))
-      }
-      return
-    }
-    if (usedGrid === 'local') {
-      try {
-        const intervalMinutes = 10
-        const gridSize = 5000
-        const dataArea = 5
-        const calculateLocalCoordinate = (value: number, dataArea: number) => {
-          return Math.trunc(value / dataArea) - (value < 0 ? 1 : 0)
-        }
-        const x = calculateLocalCoordinate(center.lon, dataArea)
-        const y = calculateLocalCoordinate(center.lat, dataArea)
-        const payload: any = await callJsonRpc<any>(
-          SERVICE_URL,
-          'get_local_strikes_grid',
-          [x, y, gridSize, intervalMinutes, 0, 0, dataArea]
-        )
-        const t = payload?.t as string
-        const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
-        const r = payload?.r as any[]
-        const parsed = parseGridToStrikes(t, gridParams, r)
-        setStrikes(parsed)
-        setLastUpdate(new Date().toLocaleTimeString())
-      } catch (e: any) {
-        setError(String(e?.message || e))
-      }
-      return
-    }
-    if (usedGrid === 'global') {
-      try {
-        const intervalMinutes = 10
-        const gridSize = 4
-        const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_global_strikes_grid', [intervalMinutes, gridSize, 0, 0])
-        const t = payload?.t as string
-        const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
-        const r = payload?.r as any[]
-        const parsed = parseGridToStrikes(t, gridParams, r)
-        setStrikes(parsed)
-        setLastUpdate(new Date().toLocaleTimeString())
-      } catch (e: any) {
-        setError(String(e?.message || e))
-      }
-      return
-    }
-    if (!nextIdRef.current) return
-    const intervalMinutes = 10
+  const fetchRefresh = useCallback(async () => {
     try {
-      const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_strikes', [intervalMinutes, nextIdRef.current])
-      const t = payload?.t as string
-      const s = payload?.s as any[]
-      const parsed = parseStrikes(t, s)
-      if (parsed.length) {
-        setStrikes((prev) => {
-          const oneHourAgo = Date.now() - 60 * 60 * 1000
-          return [...prev.filter(p => p.timestamp >= oneHourAgo), ...parsed]
-        })
-        setLastUpdate(new Date().toLocaleTimeString())
-      }
-      if (typeof payload?.next === 'number') nextIdRef.current = payload.next
+      const parsed = await fetchGlobalGrid(60, 4)
+      setStrikes(parsed)
+      setLastUpdate(new Date().toLocaleTimeString())
     } catch (e: any) {
       setError(String(e?.message || e))
     }
-  }, [usedGrid, center])
+  }, [fetchGlobalGrid])
 
   useEffect(() => {
     let mounted = true
     ;(async () => {
       try { await fetchInitial() } catch (e: any) { setError(String(e?.message || e)) }
     })()
-    const id = setInterval(() => { fetchIncremental().catch(e => setError(String(e?.message || e))) }, 7000)
+    const id = setInterval(() => { fetchRefresh().catch(e => setError(String(e?.message || e))) }, 60000)
     return () => { mounted = false; clearInterval(id) }
-  }, [fetchInitial, fetchIncremental])
+  }, [fetchInitial, fetchRefresh])
 
-  const markers: MarkerConfig[] = strikes.map((s) => ({
+  const markers: MarkerConfig[] = strikes.map((s, idx) => ({
     id: s.id,
     coordinate: { latitude: s.latitude, longitude: s.longitude },
-    icon: { color: '#ff0000', size: 10 },
+    icon: { color: '#ff0000', size: 9 },
     title: `${new Date(s.timestamp).toLocaleTimeString()}`,
-    description: `Amp ${s.amplitude.toFixed(1)} kA • dev ${s.lateralError.toFixed(0)}km`,
+    description: `Count ${s.amplitude}`,
+    zIndex: 1,
   }))
 
-  const circles: CircleConfig[] = strikes.slice(-200).map((s, idx) => ({
-    id: `c-${s.id}-${idx}`,
+  // Optional: small circles scaled by multiplicity
+  const circles: CircleConfig[] = strikes.map((s, idx) => ({
+    id: `c-${s.id}`,
     center: { latitude: s.latitude, longitude: s.longitude },
-    radius: Math.max(1000, s.lateralError * 1000),
-    fillColor: 'rgba(255,0,0,0.12)',
-    strokeColor: 'rgba(255,0,0,0.5)',
+    radius: 20000 + Math.min(5, Math.max(1, s.amplitude)) * 5000,
+    fillColor: 'rgba(255,0,0,0.08)',
+    strokeColor: 'rgba(255,0,0,0.35)',
     strokeWidth: 1,
+    zIndex: 0,
   }))
 
   return (
@@ -344,14 +159,14 @@ export default function App() {
         ref={mapRef}
         style={styles.map}
         initialCenter={{ latitude: center.lat, longitude: center.lon }}
-        initialZoom={4}
+        initialZoom={2}
         markers={markers}
         circles={circles}
         clustering={{ enabled: true }}
         onMapReady={() => {}}
       />
       <View style={styles.hud}>
-        <Text style={styles.hudText}>strikes: {strikes.length} • updated: {lastUpdate} {usedGrid ? `(${usedGrid})` : ''}</Text>
+        <Text style={styles.hudText}>strikes: {strikes.length} • updated: {lastUpdate} (global)</Text>
       </View>
       {error ? (<View style={styles.errorBanner}><Text style={styles.errorText}>{error}</Text></View>) : null}
     </View>
