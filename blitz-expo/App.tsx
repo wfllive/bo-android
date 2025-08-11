@@ -29,7 +29,10 @@ type GridParams = {
   yc: number
 }
 
-const DEFAULT_COORD = { lat: 51.0, lon: 10.0 }
+// Center over continental USA by default
+const DEFAULT_COORD = { lat: 39.0, lon: -98.0 }
+const REGION_NORTH_AMERICA = 3
+
 const RAW_SERVICE_URL = (Constants.expoConfig?.extra as any)?.blitz?.serviceUrl || 'http://bo-service.tryb.de/'
 const SERVICE_URL = RAW_SERVICE_URL.endsWith('/') ? RAW_SERVICE_URL : RAW_SERVICE_URL + '/'
 
@@ -114,7 +117,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [strikes, setStrikes] = useState<Strike[]>([])
   const [lastUpdate, setLastUpdate] = useState<string>('—')
-  const [usedGrid, setUsedGrid] = useState<boolean>(false)
+  const [usedGrid, setUsedGrid] = useState<string>('') // '', 'global', 'na'
   const nextIdRef = useRef<number>(0)
   const mapRef = useRef<OSMViewRef>(null)
 
@@ -126,7 +129,8 @@ export default function App() {
         if (status === 'granted') {
           const pos = await Location.getCurrentPositionAsync({})
           if (!mounted) return
-          setCenter({ lat: pos.coords.latitude, lon: pos.coords.longitude })
+          // Keep USA centered per request; comment next line to auto-center on user
+          // setCenter({ lat: pos.coords.latitude, lon: pos.coords.longitude })
         }
       } catch (e: any) { setError(String(e?.message || e)) }
     })()
@@ -142,7 +146,7 @@ export default function App() {
       const s = payload?.s as any[]
       const parsed = parseStrikes(t, s)
       if (parsed.length > 0) {
-        setUsedGrid(false)
+        setUsedGrid('')
         setStrikes(parsed)
         setLastUpdate(new Date().toLocaleTimeString())
         if (typeof payload?.next === 'number') nextIdRef.current = payload.next
@@ -151,7 +155,31 @@ export default function App() {
     } catch (e: any) {
       setError(String(e?.message || e))
     }
-    // Fallback: global grid snapshot
+    // Fallback 1: North America regional grid snapshot
+    try {
+      const gridSize = 5000
+      const intervalOffset = 0
+      const countThreshold = 0
+      const payload: any = await callJsonRpc<any>(
+        SERVICE_URL,
+        'get_strikes_grid',
+        [intervalMinutes, gridSize, intervalOffset, REGION_NORTH_AMERICA, countThreshold]
+      )
+      const t = payload?.t as string
+      const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
+      const r = payload?.r as any[]
+      const parsed = parseGridToStrikes(t, gridParams, r)
+      if (parsed.length > 0) {
+        setUsedGrid('na')
+        setStrikes(parsed)
+        setLastUpdate(new Date().toLocaleTimeString())
+        nextIdRef.current = 0
+        return
+      }
+    } catch (e: any) {
+      setError(String(e?.message || e))
+    }
+    // Fallback 2: Global grid snapshot
     try {
       const gridSize = 4
       const intervalOffset = 0
@@ -161,7 +189,7 @@ export default function App() {
       const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
       const r = payload?.r as any[]
       const parsed = parseGridToStrikes(t, gridParams, r)
-      setUsedGrid(true)
+      setUsedGrid('global')
       setStrikes(parsed)
       setLastUpdate(new Date().toLocaleTimeString())
       nextIdRef.current = 0
@@ -171,8 +199,27 @@ export default function App() {
   }, [])
 
   const fetchIncremental = useCallback(async () => {
-    if (usedGrid) {
-      // For grid fallback, just refresh snapshot periodically
+    if (usedGrid === 'na') {
+      try {
+        const intervalMinutes = 10
+        const gridSize = 5000
+        const payload: any = await callJsonRpc<any>(
+          SERVICE_URL,
+          'get_strikes_grid',
+          [intervalMinutes, gridSize, 0, REGION_NORTH_AMERICA, 0]
+        )
+        const t = payload?.t as string
+        const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
+        const r = payload?.r as any[]
+        const parsed = parseGridToStrikes(t, gridParams, r)
+        setStrikes(parsed)
+        setLastUpdate(new Date().toLocaleTimeString())
+      } catch (e: any) {
+        setError(String(e?.message || e))
+      }
+      return
+    }
+    if (usedGrid === 'global') {
       try {
         const intervalMinutes = 10
         const gridSize = 4
@@ -247,7 +294,7 @@ export default function App() {
         onMapReady={() => {}}
       />
       <View style={styles.hud}>
-        <Text style={styles.hudText}>strikes: {strikes.length} • updated: {lastUpdate} {usedGrid ? '(grid)' : ''}</Text>
+        <Text style={styles.hudText}>strikes: {strikes.length} • updated: {lastUpdate} {usedGrid ? `(${usedGrid})` : ''}</Text>
       </View>
       {error ? (<View style={styles.errorBanner}><Text style={styles.errorText}>{error}</Text></View>) : null}
     </View>
