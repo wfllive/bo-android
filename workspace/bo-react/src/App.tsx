@@ -20,50 +20,69 @@ interface RpcResponse {
   h?: number[]
 }
 
+async function requestStrikes(): Promise<RpcResponse | null> {
+  try {
+    const payload = { params: [10, -1] }
+    const { data } = await axios.post<RpcResponse>(
+      '/rpc',
+      { id: 0, method: 'get_strikes', params: payload.params },
+      { headers: { 'Content-Type': 'text/json' } }
+    )
+    return (Array.isArray(data) ? (data as any)[0] : data) || null
+  } catch {
+    return null
+  }
+}
+
+async function loadFallback(): Promise<RpcResponse | null> {
+  try {
+    const { data } = await axios.get<RpcResponse>('/demo-strikes.json')
+    return data
+  } catch {
+    return null
+  }
+}
+
 function App() {
   const [strikes, setStrikes] = useState<Strike[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const mapCenter = useMemo(() => ({ lat: 51.1657, lng: 10.4515 }), []) // Germany center
+  const mapCenter = useMemo(() => ({ lat: 51.1657, lng: 10.4515 }), [])
 
   useEffect(() => {
     let cancelled = false
 
-    async function fetchStrikes() {
-      try {
-        setLoading(true)
-        setError(null)
-        // Android app calls get_strikes(intervalDuration, nextId or negative offset). Start with last 10 minutes.
-        const payload = { params: [10, -1] }
-        const { data } = await axios.post<RpcResponse>(
-          '/rpc',
-          { id: 0, method: 'get_strikes', params: payload.params },
-          { headers: { 'Content-Type': 'text/json' } }
-        )
-
-        // If array-wrapped, unwrap first element
-        const response: RpcResponse = Array.isArray(data) ? (data as any)[0] : data
-        const referenceTime = response.t ? Date.parse(response.t) : Date.now()
-        const raw = response.s || []
-        const mapped: Strike[] = raw.map(([deltaSec, lon, lat, lateralError, amplitude]) => ({
-          timestamp: referenceTime - deltaSec * 1000,
-          longitude: lon,
-          latitude: lat,
-          lateralError,
-          altitude: 0,
-          amplitude,
-        }))
-        if (!cancelled) setStrikes(mapped)
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message || 'Failed to load strikes')
-      } finally {
-        if (!cancelled) setLoading(false)
+    async function fetchOnce() {
+      setLoading(true)
+      setError(null)
+      const response = await requestStrikes()
+      let resp = response
+      if (!resp || (!resp.s && !resp.t)) {
+        // empty or failed -> fallback to demo
+        resp = await loadFallback()
+        if (!resp) {
+          if (!cancelled) setError('Нет данных от сервиса и нет локального демо')
+          setLoading(false)
+          return
+        }
       }
+      const referenceTime = resp.t ? Date.parse(resp.t) : Date.now()
+      const raw = resp.s || []
+      const mapped: Strike[] = raw.map(([deltaSec, lon, lat, lateralError, amplitude]) => ({
+        timestamp: referenceTime - deltaSec * 1000,
+        longitude: lon,
+        latitude: lat,
+        lateralError,
+        altitude: 0,
+        amplitude,
+      }))
+      if (!cancelled) setStrikes(mapped)
+      setLoading(false)
     }
 
-    fetchStrikes()
-    const id = setInterval(fetchStrikes, 15000)
+    fetchOnce()
+    const id = setInterval(fetchOnce, 15000)
     return () => {
       cancelled = true
       clearInterval(id)
@@ -97,7 +116,7 @@ function App() {
       </MapContainer>
       {loading && (
         <div style={{ position: 'absolute', top: 10, left: 10, background: '#fff', padding: '6px 10px', borderRadius: 6 }}>
-          Loading strikes...
+          Загрузка молний...
         </div>
       )}
       {error && (
