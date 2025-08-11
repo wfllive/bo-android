@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { View, StyleSheet, Text } from 'react-native'
-import MapboxGL from '@rnmapbox/maps'
+import { OSMView, type OSMViewRef, Marker as OSMMarker } from 'expo-osm-sdk'
 import * as Location from 'expo-location'
 import dayjs from 'dayjs'
 import Constants from 'expo-constants'
@@ -16,8 +16,6 @@ type Strike = {
 
 const DEFAULT_COORD = { lat: 51.0, lon: 10.0 }
 const SERVICE_URL = (Constants.expoConfig?.extra as any)?.blitz?.serviceUrl || 'http://bo-service.tryb.de/'
-
-MapboxGL.setAccessToken('')
 
 function buildJsonRpcRequest(method: string, params: any[]): string {
   return JSON.stringify({ id: 0, method, params })
@@ -71,6 +69,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [strikes, setStrikes] = useState<Strike[]>([])
   const nextIdRef = useRef<number>(0)
+  const mapRef = useRef<OSMViewRef>(null)
 
   useEffect(() => {
     let mounted = true
@@ -124,15 +123,22 @@ export default function App() {
 
   return (
     <View style={styles.container}>
-      <MapboxGL.MapView style={styles.map} styleURL="https://demotiles.maplibre.org/style.json">
-        <MapboxGL.Camera
-          zoomLevel={4}
-          centerCoordinate={[center.lon, center.lat]}
-        />
+      <OSMView
+        ref={mapRef}
+        style={styles.map}
+        initialCenter={{ latitude: center.lat, longitude: center.lon }}
+        initialZoom={4}
+        onMapReady={() => {}}
+      >
         {strikes.map((s) => (
-          <MapboxGL.PointAnnotation key={s.id} id={s.id} coordinate={[s.longitude, s.latitude]} />
+          <OSMMarker
+            key={s.id}
+            id={s.id}
+            coordinate={{ latitude: s.latitude, longitude: s.longitude }}
+            color="#ff0000"
+          />
         ))}
-      </MapboxGL.MapView>
+      </OSMView>
       {error ? (<View style={styles.errorBanner}><Text style={styles.errorText}>{error}</Text></View>) : null}
     </View>
   )

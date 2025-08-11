@@ -46,11 +46,9 @@
         }
       ],
       [
-        "@rnmapbox/maps",
+        "expo-osm-sdk/plugin",
         {
-          "android": {
-            "accessToken": ""
-          }
+          "locationPermissionText": "This app uses location for map features"
         }
       ]
     ],
