@@ -1,0 +1,64 @@
+{
+  "expo": {
+    "name": "blitz-expo",
+    "slug": "blitz-expo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "INTERNET"
+      ],
+      "package": "com.example.blitzexpo",
+      "config": {
+        "googleMaps": {
+          "apiKey": "YOUR_ANDROID_GOOGLE_MAPS_KEY"
+        }
+      }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "blitz-expo-local"
+      },
+      "blitz": {
+        "serviceUrl": "http://bo-service.tryb.de/"
+      }
+    },
+    "plugins": [
+      [
+        "expo-maps",
+        {
+          "apiKey": "YOUR_ANDROID_GOOGLE_MAPS_KEY"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
