@@ -7,14 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview",
-    "proxy": "node server.js",
-    "start": "concurrently -k -n WEB,PROXY -c blue,magenta \"npm:dev\" \"npm:proxy\""
+    "preview": "vite preview"
   },
   "dependencies": {
     "axios": "^1.11.0",
-    "concurrently": "^9.2.0",
-    "express": "^5.1.0",
     "leaflet": "^1.9.4",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
