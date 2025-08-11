@@ -10,9 +10,16 @@ async function rpcCall<T = JsonRpcResponse>(method: string, ...params: any[]): P
   })
   if (!res.ok) throw new Error(`RPC ${method} failed: ${res.status}`)
   const text = await res.text()
-  const body = text.startsWith('[') ? JSON.parse(text)[0] : JSON.parse(text)
-  if (body.fault) throw new Error(body.faultString || 'RPC fault')
-  return { data: body } as T
+  if (!text) throw new Error('Empty response')
+  let parsed
+  try {
+    parsed = text.startsWith('[') ? JSON.parse(text)[0] : JSON.parse(text)
+  } catch (e) {
+    console.error('rpc raw response:', text)
+    throw e
+  }
+  if (parsed.fault) throw new Error(parsed.faultString || 'RPC fault')
+  return { data: parsed } as T
 }
 
 export async function getStrikesGrid(params: {
