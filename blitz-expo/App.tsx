@@ -95,7 +95,8 @@ export default function App() {
 
   const fetchInitial = useCallback(async () => {
     const intervalMinutes = 5
-    const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_strikes', [intervalMinutes, 0])
+    // Android client uses negative intervalOffset for initial backlog
+    const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_strikes', [intervalMinutes, -intervalMinutes])
     const t = payload?.t as string
     const s = payload?.s as any[]
     const parsed = parseStrikes(t, s)
