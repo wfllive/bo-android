@@ -15,7 +15,8 @@ type Strike = {
 }
 
 const DEFAULT_COORD = { lat: 51.0, lon: 10.0 }
-const SERVICE_URL = (Constants.expoConfig?.extra as any)?.blitz?.serviceUrl || 'http://bo-service.tryb.de/'
+const RAW_SERVICE_URL = (Constants.expoConfig?.extra as any)?.blitz?.serviceUrl || 'http://bo-service.tryb.de/'
+const SERVICE_URL = RAW_SERVICE_URL.endsWith('/') ? RAW_SERVICE_URL : RAW_SERVICE_URL + '/'
 
 function buildJsonRpcRequest(method: string, params: any[]): string {
   return JSON.stringify({ id: 0, method, params })
@@ -28,7 +29,8 @@ async function callJsonRpc<T = any>(url: string, method: string, params: any[] =
     headers: {
       'Content-Type': 'text/json',
       'Accept': '*/*',
-      'User-Agent': 'bo-android-expo'
+      'Accept-Encoding': 'gzip',
+      'User-Agent': 'bo-android'
     },
     body,
   })
@@ -72,6 +74,7 @@ export default function App() {
   const [center, setCenter] = useState(DEFAULT_COORD)
   const [error, setError] = useState<string | null>(null)
   const [strikes, setStrikes] = useState<Strike[]>([])
+  const [lastUpdate, setLastUpdate] = useState<string>('—')
   const nextIdRef = useRef<number>(0)
   const mapRef = useRef<OSMViewRef>(null)
 
@@ -91,18 +94,19 @@ export default function App() {
   }, [])
 
   const fetchInitial = useCallback(async () => {
-    const intervalMinutes = 15
+    const intervalMinutes = 5
     const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_strikes', [intervalMinutes, 0])
     const t = payload?.t as string
     const s = payload?.s as any[]
     const parsed = parseStrikes(t, s)
     setStrikes(parsed)
+    setLastUpdate(new Date().toLocaleTimeString())
     if (typeof payload?.next === 'number') nextIdRef.current = payload.next
   }, [])
 
   const fetchIncremental = useCallback(async () => {
     if (!nextIdRef.current) return
-    const intervalMinutes = 15
+    const intervalMinutes = 5
     const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_strikes', [intervalMinutes, nextIdRef.current])
     const t = payload?.t as string
     const s = payload?.s as any[]
@@ -112,6 +116,7 @@ export default function App() {
         const oneHourAgo = Date.now() - 60 * 60 * 1000
         return [...prev.filter(p => p.timestamp >= oneHourAgo), ...parsed]
       })
+      setLastUpdate(new Date().toLocaleTimeString())
     }
     if (typeof payload?.next === 'number') nextIdRef.current = payload.next
   }, [])
@@ -128,17 +133,17 @@ export default function App() {
   const markers: MarkerConfig[] = strikes.map((s) => ({
     id: s.id,
     coordinate: { latitude: s.latitude, longitude: s.longitude },
-    icon: { color: '#ff0000', size: 12 },
-    title: `Amp ${s.amplitude.toFixed(1)} kA`,
-    description: new Date(s.timestamp).toLocaleTimeString(),
+    icon: { color: '#ff0000', size: 10 },
+    title: `${new Date(s.timestamp).toLocaleTimeString()}`,
+    description: `Amp ${s.amplitude.toFixed(1)} kA • dev ${s.lateralError.toFixed(0)}km`,
   }))
 
   const circles: CircleConfig[] = strikes.slice(-200).map((s, idx) => ({
     id: `c-${s.id}-${idx}`,
     center: { latitude: s.latitude, longitude: s.longitude },
     radius: Math.max(1000, s.lateralError * 1000),
-    fillColor: 'rgba(255,0,0,0.15)',
-    strokeColor: 'rgba(255,0,0,0.6)',
+    fillColor: 'rgba(255,0,0,0.12)',
+    strokeColor: 'rgba(255,0,0,0.5)',
     strokeWidth: 1,
   }))
 
@@ -154,6 +159,9 @@ export default function App() {
         clustering={{ enabled: true }}
         onMapReady={() => {}}
       />
+      <View style={styles.hud}>
+        <Text style={styles.hudText}>strikes: {strikes.length} • updated: {lastUpdate}</Text>
+      </View>
       {error ? (<View style={styles.errorBanner}><Text style={styles.errorText}>{error}</Text></View>) : null}
     </View>
   )
@@ -162,6 +170,11 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
+  hud: {
+    position: 'absolute', top: 8, left: 8, right: 8,
+    backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
+  },
+  hudText: { color: '#fff', fontSize: 12, textAlign: 'center' },
   errorBanner: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     backgroundColor: 'rgba(0,0,0,0.7)', padding: 8,
