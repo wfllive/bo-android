@@ -13,7 +13,7 @@ export default defineConfig({
         secure: false,
         // Ensure requests like /rpc/get_strikes forward to root
         // Our frontend will call /rpc directly; backend expects POST body with method/params.
-        rewrite: (path) => path.replace(/^\/rpc/, ''),
+        rewrite: () => '/',
       },
     },
   },
