@@ -6,7 +6,7 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-const TARGET = process.env.SERVICE_URL || 'https://bo-service.tryb.de/'
+const TARGET = process.env.SERVICE_URL || 'http://bo-service.tryb.de/'
 
 app.post('/rpc', async (req, res) => {
   try {
