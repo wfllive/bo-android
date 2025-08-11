@@ -29,6 +29,12 @@ export default defineConfig({
         secure: false,
         rewrite: () => '/',
       },
+      '/bo': {
+        target: 'http://data.blitzortung.org',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/bo/, ''),
+      },
     },
   },
 })

@@ -3,6 +3,7 @@ import { MapContainer, TileLayer, CircleMarker, Tooltip, ScaleControl } from 're
 import 'leaflet/dist/leaflet.css'
 import './App.css'
 import axios from 'axios'
+import { fetchRecentStrikesFromHttp } from './blitzortung/httpProvider'
 
 interface Strike {
   timestamp: number
@@ -20,7 +21,7 @@ interface RpcResponse {
   h?: number[]
 }
 
-async function requestStrikes(): Promise<RpcResponse | null> {
+async function requestStrikesRpc(): Promise<RpcResponse | null> {
   try {
     const payload = { params: [10, -1] }
     const { data } = await axios.post<RpcResponse>(
@@ -48,6 +49,11 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const [source, setSource] = useState<'http' | 'rpc'>('http')
+  const [region, setRegion] = useState<number>(2)
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+
   const mapCenter = useMemo(() => ({ lat: 51.1657, lng: 10.4515 }), [])
 
   useEffect(() => {
@@ -56,28 +62,52 @@ function App() {
     async function fetchOnce() {
       setLoading(true)
       setError(null)
-      const response = await requestStrikes()
-      let resp = response
-      if (!resp || (!resp.s && !resp.t)) {
-        // empty or failed -> fallback to demo
-        resp = await loadFallback()
-        if (!resp) {
-          if (!cancelled) setError('Нет данных от сервиса и нет локального демо')
+
+      // 1) HTTP provider if chosen and creds provided
+      if (source === 'http' && username && password) {
+        const httpStrikes = await fetchRecentStrikesFromHttp(region, 10, username, password)
+        if (httpStrikes.length > 0) {
+          if (!cancelled) setStrikes(httpStrikes)
           setLoading(false)
           return
         }
       }
-      const referenceTime = resp.t ? Date.parse(resp.t) : Date.now()
-      const raw = resp.s || []
-      const mapped: Strike[] = raw.map(([deltaSec, lon, lat, lateralError, amplitude]) => ({
-        timestamp: referenceTime - deltaSec * 1000,
-        longitude: lon,
-        latitude: lat,
-        lateralError,
-        altitude: 0,
-        amplitude,
-      }))
-      if (!cancelled) setStrikes(mapped)
+
+      // 2) JSON-RPC provider
+      const response = await requestStrikesRpc()
+      if (response && (response.s?.length || 0) > 0) {
+        const referenceTime = response.t ? Date.parse(response.t) : Date.now()
+        const raw = response.s || []
+        const mapped: Strike[] = raw.map(([deltaSec, lon, lat, lateralError, amplitude]) => ({
+          timestamp: referenceTime - deltaSec * 1000,
+          longitude: lon,
+          latitude: lat,
+          lateralError,
+          altitude: 0,
+          amplitude,
+        }))
+        if (!cancelled) setStrikes(mapped)
+        setLoading(false)
+        return
+      }
+
+      // 3) Fallback demo
+      const demo = await loadFallback()
+      if (demo && demo.s) {
+        const referenceTime = demo.t ? Date.parse(demo.t) : Date.now()
+        const raw = demo.s || []
+        const mapped: Strike[] = raw.map(([deltaSec, lon, lat, lateralError, amplitude]) => ({
+          timestamp: referenceTime - deltaSec * 1000,
+          longitude: lon,
+          latitude: lat,
+          lateralError,
+          altitude: 0,
+          amplitude,
+        }))
+        if (!cancelled) setStrikes(mapped)
+      } else {
+        if (!cancelled) setError('Нет данных от сервисов')
+      }
       setLoading(false)
     }
 
@@ -87,10 +117,38 @@ function App() {
       cancelled = true
       clearInterval(id)
     }
-  }, [])
+  }, [source, region, username, password])
 
   return (
     <div style={{ height: '100vh', width: '100vw' }}>
+      <div style={{ position: 'absolute', zIndex: 1000, top: 10, left: 10, background: '#ffffffcc', padding: 8, borderRadius: 8 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label>
+            Source:
+            <select value={source} onChange={(e) => setSource(e.target.value as any)} style={{ marginLeft: 6 }}>
+              <option value="http">HTTP (auth)</option>
+              <option value="rpc">JSON-RPC</option>
+            </select>
+          </label>
+          <label>
+            Region:
+            <input type="number" value={region} onChange={(e) => setRegion(parseInt(e.target.value || '0', 10))} style={{ width: 64, marginLeft: 6 }} />
+          </label>
+          {source === 'http' && (
+            <>
+              <label>
+                Username:
+                <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} style={{ marginLeft: 6 }} />
+              </label>
+              <label>
+                Password:
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={{ marginLeft: 6 }} />
+              </label>
+            </>
+          )}
+        </div>
+      </div>
+
       <MapContainer center={[mapCenter.lat, mapCenter.lng]} zoom={5} style={{ height: '100%', width: '100%' }} preferCanvas>
         <TileLayer
           attribution='&copy; OpenStreetMap contributors'
@@ -115,12 +173,12 @@ function App() {
         ))}
       </MapContainer>
       {loading && (
-        <div style={{ position: 'absolute', top: 10, left: 10, background: '#fff', padding: '6px 10px', borderRadius: 6 }}>
-          Загрузка молний...
+        <div style={{ position: 'absolute', top: 60, left: 10, background: '#fff', padding: '6px 10px', borderRadius: 6 }}>
+          Загрузка...
         </div>
       )}
       {error && (
-        <div style={{ position: 'absolute', top: 10, right: 10, background: '#fee', color: '#900', padding: '6px 10px', borderRadius: 6 }}>
+        <div style={{ position: 'absolute', top: 60, right: 10, background: '#fee', color: '#900', padding: '6px 10px', borderRadius: 6 }}>
           {error}
         </div>
       )}
