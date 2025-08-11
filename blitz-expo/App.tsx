@@ -29,20 +29,30 @@ async function callJsonRpc<T = any>(url: string, method: string, params: any[] =
     body,
   })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
-  const text = await response.text()
-  const json = text.startsWith('[') ? JSON.parse(text)[0] : JSON.parse(text)
-  return json as T
+  const rawText = await response.text()
+  const text = (rawText || '').trim()
+  if (!text) throw new Error('Empty JSON-RPC response')
+  try {
+    const parsed = JSON.parse(text)
+    const json = Array.isArray(parsed) ? parsed[0] : parsed
+    if (!json || typeof json !== 'object') throw new Error('Invalid JSON-RPC payload')
+    return json as T
+  } catch (e: any) {
+    throw new Error(`JSON parse failed: ${e?.message || e}`)
+  }
 }
 
 function parseStrikes(referenceTimeIso: string, strikesArray: any[]): Strike[] {
   const referenceMs = dayjs(referenceTimeIso, "YYYYMMDD'T'HH:mm:ss").valueOf()
+  if (!Number.isFinite(referenceMs)) return []
+  if (!Array.isArray(strikesArray)) return []
   return strikesArray.map((arr, idx) => {
-    const secondsAgo = arr[0] as number
-    const longitude = arr[1] as number
-    const latitude = arr[2] as number
-    const lateralError = arr[3] as number
-    const amplitude = arr[4] as number
-    const timestamp = referenceMs - secondsAgo * 1000
+    const secondsAgo = arr?.[0] as number
+    const longitude = arr?.[1] as number
+    const latitude = arr?.[2] as number
+    const lateralError = arr?.[3] as number
+    const amplitude = arr?.[4] as number
+    const timestamp = referenceMs - (Number.isFinite(secondsAgo) ? secondsAgo : 0) * 1000
     return {
       id: `${timestamp}-${longitude}-${latitude}-${idx}`,
       timestamp,
@@ -76,29 +86,35 @@ const HTML = (centerLat: number, centerLon: number) => `<!doctype html>
   });
   const strikes = new Map();
   function updateStrikes(items) {
+    if (!Array.isArray(items)) return;
     const cutoff = Date.now() - 60 * 60 * 1000;
     // Remove old
     for (const [id, m] of strikes) {
       if (m.timestamp < cutoff) {
-        m.el.remove();
+        try { m.marker.remove(); } catch (e) {}
         strikes.delete(id);
       }
     }
     // Add new
     items.forEach(s => {
-      if (strikes.has(s.id)) return;
+      if (!s || !('id' in s) || strikes.has(s.id)) return;
       const el = document.createElement('div');
       el.className = 'marker';
       const marker = new maplibregl.Marker({ element: el }).setLngLat([s.longitude, s.latitude]).addTo(map);
       strikes.set(s.id, { el, marker, timestamp: s.timestamp });
     });
   }
-  document.addEventListener('message', (e) => {
+  function onMessage(evt) {
     try {
-      const data = JSON.parse(e.data);
-      if (data.type === 'strikes') updateStrikes(data.payload || []);
-    } catch {}
-  });
+      const dataRaw = (evt && evt.data) ? evt.data : null;
+      if (!dataRaw || typeof dataRaw !== 'string') return;
+      const data = JSON.parse(dataRaw);
+      if (data && data.type === 'strikes') updateStrikes(data.payload || []);
+    } catch (e) {
+      // ignore parse errors silently
+    }
+  }
+  window.addEventListener('message', onMessage);
 </script>
 </body>
 </html>`
@@ -125,29 +141,31 @@ export default function App() {
   }, [])
 
   const postStrikes = useCallback((strikes: Strike[]) => {
-    const payload = JSON.stringify({ type: 'strikes', payload: strikes })
-    webRef.current?.postMessage(payload)
+    try {
+      const payload = JSON.stringify({ type: 'strikes', payload: strikes })
+      webRef.current?.postMessage(payload)
+    } catch {}
   }, [])
 
   const fetchInitial = useCallback(async () => {
     const intervalMinutes = 15
     const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_strikes', [intervalMinutes, 0])
-    const t = payload.t as string
-    const s = payload.s as any[]
+    const t = payload?.t as string
+    const s = payload?.s as any[]
     const parsed = parseStrikes(t, s)
     postStrikes(parsed)
-    if (typeof payload.next === 'number') nextIdRef.current = payload.next
+    if (typeof payload?.next === 'number') nextIdRef.current = payload.next
   }, [postStrikes])
 
   const fetchIncremental = useCallback(async () => {
     if (!nextIdRef.current) return
     const intervalMinutes = 15
     const payload: any = await callJsonRpc<any>(SERVICE_URL, 'get_strikes', [intervalMinutes, nextIdRef.current])
-    const t = payload.t as string
-    const s = payload.s as any[]
+    const t = payload?.t as string
+    const s = payload?.s as any[]
     const parsed = parseStrikes(t, s)
     if (parsed.length) postStrikes(parsed)
-    if (typeof payload.next === 'number') nextIdRef.current = payload.next
+    if (typeof payload?.next === 'number') nextIdRef.current = payload.next
   }, [postStrikes])
 
   useEffect(() => {
@@ -155,7 +173,7 @@ export default function App() {
     ;(async () => {
       try { await fetchInitial() } catch (e: any) { setError(String(e?.message || e)) }
     })()
-    const id = setInterval(() => { fetchIncremental().catch(e => setError(String(e?.message || e))) }, 5000)
+    const id = setInterval(() => { fetchIncremental().catch(e => setError(String(e?.message || e))) }, 7000)
     return () => { mounted = false; clearInterval(id) }
   }, [fetchInitial, fetchIncremental])
 
