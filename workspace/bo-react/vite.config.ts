@@ -28,6 +28,16 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
         rewrite: () => '/',
+        configure: (proxy) => {
+          const p: any = proxy
+          p.on('proxyReq', (proxyReq: any) => {
+            try {
+              proxyReq.setHeader('User-Agent', 'bo-android-100')
+              proxyReq.setHeader('Content-Type', 'text/json')
+              proxyReq.setHeader('Accept-Encoding', 'gzip')
+            } catch {}
+          })
+        },
       },
       '/bo': {
         target: 'http://data.blitzortung.org',
