@@ -3,12 +3,12 @@ const axios = require('axios')
 const cors = require('cors')
 
 const app = express()
-const PORT = process.env.PORT || 5174
+const PORT = 5174
 
 app.use(cors())
 app.use(express.json({ limit: '1mb' }))
 
-const DEFAULT_SERVICE_URL = process.env.BO_SERVICE_URL || 'http://bo-service.tryb.de/'
+const DEFAULT_SERVICE_URL = 'http://bo-service.tryb.de/'
 
 app.post('/rpc/:method', async (req, res) => {
   const { method } = req.params

@@ -36,7 +36,7 @@ function App() {
         setError(null)
         // Android app calls get_strikes(intervalDuration, nextId or negative offset). Start with last 10 minutes.
         const payload = { params: [10, -1] }
-        const { data } = await axios.post<RpcResponse>('/rpc/get_strikes', payload)
+        const { data } = await axios.post<RpcResponse>('http://localhost:5174/rpc/get_strikes', payload)
 
         // If array-wrapped, unwrap first element
         const response: RpcResponse = Array.isArray(data) ? (data as any)[0] : data
