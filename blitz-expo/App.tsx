@@ -3,7 +3,13 @@ import { View, StyleSheet, Text } from 'react-native'
 import { OSMView, type OSMViewRef, type MarkerConfig, type CircleConfig } from 'expo-osm-sdk'
 import * as Location from 'expo-location'
 import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
+import customParseFormat from 'dayjs/plugin/customParseFormat'
 import Constants from 'expo-constants'
+
+// Enable UTC and custom parse formats for dayjs
+dayjs.extend(utc)
+dayjs.extend(customParseFormat)
 
 type Strike = {
   id: string
@@ -58,7 +64,7 @@ async function callJsonRpc<T = any>(url: string, method: string, params: any[] =
 }
 
 function parseStrikes(referenceTimeIso: string, strikesArray: any[]): Strike[] {
-  const referenceMs = dayjs(referenceTimeIso, "YYYYMMDD'T'HH:mm:ss").valueOf()
+  const referenceMs = dayjs.utc(referenceTimeIso, "YYYYMMDD'T'HH:mm:ss", true).valueOf()
   if (!Number.isFinite(referenceMs)) return []
   if (!Array.isArray(strikesArray)) return []
   return strikesArray.map((arr, idx) => {
@@ -80,7 +86,7 @@ function parseStrikes(referenceTimeIso: string, strikesArray: any[]): Strike[] {
 }
 
 function parseGridToStrikes(referenceTimeIso: string, gridParams: GridParams, r: any[]): Strike[] {
-  const referenceMs = dayjs(referenceTimeIso, "YYYYMMDD'T'HH:mm:ss").valueOf()
+  const referenceMs = dayjs.utc(referenceTimeIso, "YYYYMMDD'T'HH:mm:ss", true).valueOf()
   if (!Number.isFinite(referenceMs)) return []
   if (!Array.isArray(r)) return []
   const { x0, y1, xd, yd } = gridParams
