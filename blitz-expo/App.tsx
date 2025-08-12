@@ -43,9 +43,8 @@ async function callJsonRpc<T = any>(baseUrl: string, method: string, params: any
     method: 'POST',
     headers: {
       'Content-Type': 'text/json',
-      'Accept': '*/*',
-      'Accept-Encoding': 'gzip',
-      'User-Agent': 'bo-android'
+      'Accept': 'application/json',
+      'User-Agent': 'bo-android-1'
     },
     body,
   })
@@ -89,47 +88,50 @@ export default function App() {
   const [debugInfo, setDebugInfo] = useState<string>('')
   const mapRef = useRef<OSMViewRef>(null)
 
-  const fetchGlobalGridBase = useCallback(async (baseUrl: string, intervalMinutes: number, gridSize: number) => {
-    const payload: any = await callJsonRpc<any>(baseUrl, 'get_global_strikes_grid', [intervalMinutes, gridSize, 0, 0])
+  const fetchRegionGridBase = useCallback(async (baseUrl: string, intervalMinutes: number, gridSize: number, region: number) => {
+    const payload: any = await callJsonRpc<any>(baseUrl, 'get_strikes_grid', [intervalMinutes, gridSize, 0, region, 0])
     const t = payload?.t as string
     const gridParams: GridParams = { x0: payload?.x0, y1: payload?.y1, xd: payload?.xd, yd: payload?.yd, xc: payload?.xc, yc: payload?.yc }
     const r = payload?.r as any[]
-    const parsed = parseGridToStrikes(t, gridParams, r)
-    setDebugInfo(`t=${t || 'n/a'} r.len=${Array.isArray(r) ? r.length : 'n/a'} x0=${gridParams.x0?.toFixed?.(2) ?? 'n/a'} xd=${gridParams.xd?.toFixed?.(2) ?? 'n/a'}`)
-    return parsed
+    return { parsed: parseGridToStrikes(t, gridParams, r), t, rLen: Array.isArray(r) ? r.length : 0 }
   }, [])
 
-  const fetchGlobalGrid = useCallback(async (intervalMinutes: number, gridSize: number) => {
-    const parsedHttp = await fetchGlobalGridBase(BASE_HTTP, intervalMinutes, gridSize)
-    if (parsedHttp.length > 0) return parsedHttp
-    // Try HTTPS fallback if HTTP returns empty
-    try {
-      const parsedHttps = await fetchGlobalGridBase(BASE_HTTPS, intervalMinutes, gridSize)
-      return parsedHttps
-    } catch {
-      return parsedHttp
+  const fetchAllRegions = useCallback(async (intervalMinutes: number, gridSize: number) => {
+    const regions = [1, 3, 7, 5, 2, 4, 6] // Europe, N.America, C.America, S.America, Oceania, Asia, Africa
+    // Try HTTP first
+    const httpResults = await Promise.all(regions.map(r => fetchRegionGridBase(BASE_HTTP, intervalMinutes, gridSize, r).catch(() => ({ parsed: [], t: 'err', rLen: 0 }))))
+    let combined = httpResults.flatMap(x => x.parsed)
+    let dbg = `HTTP rLens=[${httpResults.map(x => x.rLen).join(',')}]`
+    if (combined.length === 0) {
+      // Try HTTPS fallback
+      const httpsResults = await Promise.all(regions.map(r => fetchRegionGridBase(BASE_HTTPS, intervalMinutes, gridSize, r).catch(() => ({ parsed: [], t: 'err', rLen: 0 }))))
+      combined = httpsResults.flatMap(x => x.parsed)
+      dbg += `; HTTPS rLens=[${httpsResults.map(x => x.rLen).join(',')}]`
     }
-  }, [fetchGlobalGridBase])
+    setDebugInfo(dbg)
+    return combined
+  }, [fetchRegionGridBase])
 
   const fetchInitial = useCallback(async () => {
     try {
-      const parsed = await fetchGlobalGrid(240, 4)
-      setStrikes(parsed)
+      // 240 minutes to ensure historical coverage worldwide across regions
+      const combined = await fetchAllRegions(240, 5000)
+      setStrikes(combined)
       setLastUpdate(new Date().toLocaleTimeString())
     } catch (e: any) {
       setError(String(e?.message || e))
     }
-  }, [fetchGlobalGrid])
+  }, [fetchAllRegions])
 
   const fetchRefresh = useCallback(async () => {
     try {
-      const parsed = await fetchGlobalGrid(60, 4)
-      setStrikes(parsed)
+      const combined = await fetchAllRegions(60, 5000)
+      setStrikes(combined)
       setLastUpdate(new Date().toLocaleTimeString())
     } catch (e: any) {
       setError(String(e?.message || e))
     }
-  }, [fetchGlobalGrid])
+  }, [fetchAllRegions])
 
   useEffect(() => {
     let mounted = true
@@ -172,7 +174,7 @@ export default function App() {
         onMapReady={() => {}}
       />
       <View style={styles.hud}>
-        <Text style={styles.hudText}>strikes: {strikes.length} • updated: {lastUpdate} (global)</Text>
+        <Text style={styles.hudText}>strikes: {strikes.length} • updated: {lastUpdate} (regions)</Text>
         {debugInfo ? <Text style={styles.hudTextSmall}>{debugInfo}</Text> : null}
       </View>
       {error ? (<View style={styles.errorBanner}><Text style={styles.errorText}>{error}</Text></View>) : null}
